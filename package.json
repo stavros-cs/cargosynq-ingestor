@@ -1,0 +1,30 @@
+{
+  "name": "cargosynq-ingestor",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "sst dev",
+    "build": "sst build",
+    "deploy": "sst deploy",
+    "remove": "sst remove",
+    "console": "sst console",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.490.0",
+    "@aws-sdk/client-s3": "^3.490.0",
+    "@types/uuid": "^10.0.0",
+    "mailparser": "^3.6.5",
+    "pdf-extraction": "^1.0.2",
+    "pdf-parse": "^1.1.1",
+    "pdf2json": "^3.2.2",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.143",
+    "@types/mailparser": "^3.4.0",
+    "@types/node": "^20.11.5",
+    "sst": "^3.0.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,173 @@
+import { SQSEvent, SQSHandler } from 'aws-lambda';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { Resource } from 'sst';
+// Use pdf2json as a more reliable alternative for Lambda environments
+import PDFParser from 'pdf2json';
+
+async function parsePdfWithPdf2json(pdfBuffer: Buffer): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pdfParser = new (PDFParser as any)(null, 1);
+    
+    pdfParser.on('pdfParser_dataError', (errData: any) => {
+      console.error('PDF parsing error:', errData.parserError);
+      reject(new Error(`PDF parsing failed: ${errData.parserError}`));
+    });
+    
+    pdfParser.on('pdfParser_dataReady', (pdfData: any) => {
+      try {
+        // Extract text from pdf2json format
+        const pages = pdfData.Pages || [];
+        let fullText = '';
+        
+        pages.forEach((page: any, pageIndex: number) => {
+          const texts = page.Texts || [];
+          texts.forEach((textItem: any) => {
+            if (textItem.R && textItem.R.length > 0) {
+              textItem.R.forEach((run: any) => {
+                if (run.T) {
+                  // Decode URI component as pdf2json encodes text
+                  fullText += decodeURIComponent(run.T) + ' ';
+                }
+              });
+            }
+          });
+          fullText += '\n'; // Add newline between pages
+        });
+        
+        // Create pdf-parse compatible result
+        const result = {
+          text: fullText.trim(),
+          numpages: pages.length,
+          info: {
+            Title: pdfData.Meta?.Title || '',
+            Author: pdfData.Meta?.Author || '',
+            Subject: pdfData.Meta?.Subject || '',
+            Creator: pdfData.Meta?.Creator || '',
+            Producer: pdfData.Meta?.Producer || '',
+            CreationDate: pdfData.Meta?.CreationDate || '',
+            ModDate: pdfData.Meta?.ModDate || '',
+          }
+        };
+        
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    
+    // Parse the PDF buffer
+    pdfParser.parseBuffer(pdfBuffer);
+  });
+}
+
+const s3 = new S3Client({});
+const dynamodb = new DynamoDBClient({});
+
+export const handler: SQSHandler = async (event: SQSEvent) => {
+  console.log('Processing PDF files for content extraction:', JSON.stringify(event, null, 2));
+
+  for (const record of event.Records) {
+    try {
+      // Parse the message body (contains EventBridge event)
+      const eventBridgeEvent = JSON.parse(record.body);
+      
+      // Extract S3 object information from EventBridge event
+      const bucketName = eventBridgeEvent.detail.bucket.name;
+      const objectKey = eventBridgeEvent.detail.object.key;
+      
+      console.log(`Processing PDF file content: ${objectKey} from bucket: ${bucketName}`);
+
+      // Get the PDF file from S3
+      const getObjectCommand = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: objectKey,
+      });
+      
+      const s3Response = await s3.send(getObjectCommand);
+      const pdfBuffer = await streamToBuffer(s3Response.Body);
+
+      if (!pdfBuffer) {
+        throw new Error('Failed to read PDF file content');
+      }
+
+      // Parse PDF content using pdf2json (more reliable in Lambda)
+      const data = await parsePdfWithPdf2json(pdfBuffer);
+      const extractedText = data.text;
+      
+      // Create PDF record for DynamoDB
+      const pdfData = {
+        id: `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        fileName: objectKey,
+        bucketName: bucketName,
+        fileType: 'pdf',
+        processedAt: new Date().toISOString(),
+        
+        // PDF metadata
+        fileSize: pdfBuffer.length,
+        isValidPdf: true,
+        
+        // Extracted content from pdf-parse (same as your working code)
+        textContent: extractedText || '',
+        pageCount: data.numpages || 0,
+        
+        // Additional metadata from pdf-parse info
+        pdfInfo: {
+          title: data.info?.Title || '',
+          author: data.info?.Author || '',
+          subject: data.info?.Subject || '',
+          creator: data.info?.Creator || '',
+          producer: data.info?.Producer || '',
+          creationDate: data.info?.CreationDate || '',
+          modDate: data.info?.ModDate || '',
+        },
+        
+        // Content statistics
+        characterCount: extractedText?.length || 0,
+        wordCount: extractedText ? extractedText.split(/\s+/).filter((word: string) => word.length > 0).length : 0,
+      };
+
+      console.log(`Successfully extracted PDF content. Text length: ${extractedText.length}, Pages: ${data.numpages}`);
+
+      // Save to DynamoDB
+      const putItemCommand = new PutItemCommand({
+        TableName: Resource.CargosynqIngestorRecords.name,
+        Item: {
+          id: { S: pdfData.id },
+          fileName: { S: pdfData.fileName },
+          bucketName: { S: pdfData.bucketName },
+          fileType: { S: pdfData.fileType },
+          processedAt: { S: pdfData.processedAt },
+          fileSize: { N: pdfData.fileSize.toString() },
+          isValidPdf: { BOOL: pdfData.isValidPdf },
+          textContent: { S: pdfData.textContent },
+          pageCount: { N: pdfData.pageCount.toString() },
+          pdfInfo: { S: JSON.stringify(pdfData.pdfInfo) },
+          characterCount: { N: pdfData.characterCount.toString() },
+          wordCount: { N: pdfData.wordCount.toString() },
+        },
+      });
+
+      await dynamodb.send(putItemCommand);
+      console.log(`PDF record saved to DynamoDB with ID: ${pdfData.id}`);
+
+    } catch (error) {
+      // Log the error but consume the message (don't throw)
+      // This prevents the message from going back to the queue
+      console.error(`Failed to process PDF file. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      
+      // The message will be consumed and not retried
+      // No DynamoDB record will be created for failed PDFs
+    }
+  }
+};
+
+// Utility to convert stream to Buffer (same as your working Lambda)
+const streamToBuffer = async (stream: any): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const chunks: any[] = [];
+    stream.on("data", (chunk: any) => chunks.push(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+  });
