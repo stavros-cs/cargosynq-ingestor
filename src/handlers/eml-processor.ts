@@ -7,6 +7,15 @@ import { simpleParser, ParsedMail } from 'mailparser';
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
 
+// Generate consistent session ID from S3 object details
+function generateSessionId(objectKey: string, etag?: string): string {
+  // Use ETag if available (most reliable), otherwise use object key hash
+  const baseString = etag || objectKey;
+  // Remove quotes from ETag if present and create a clean session ID
+  const cleanBase = baseString.replace(/['"]/g, '');
+  return `session-${cleanBase.substring(0, 16)}`;
+}
+
 export const handler: SQSHandler = async (event: SQSEvent) => {
   console.log('Processing EML files from SQS messages:', JSON.stringify(event, null, 2));
 
@@ -18,6 +27,12 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       // Extract S3 object information from EventBridge event
       const bucketName = eventBridgeEvent.detail.bucket.name;
       const objectKey = eventBridgeEvent.detail.object.key;
+      const s3ETag = eventBridgeEvent.detail.object.etag;
+      
+      // Generate consistent session ID based on original S3 object
+      const sessionId = generateSessionId(objectKey, s3ETag);
+      
+      console.log(`Processing EML file: ${objectKey} from bucket: ${bucketName}, Session ID: ${sessionId}`);
       
       console.log(`Processing EML file: ${objectKey} from bucket: ${bucketName}`);
 
@@ -40,6 +55,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       // Extract email data
       const emailData = {
         id: `eml-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        sessionId: sessionId,
         fileName: objectKey,
         bucketName: bucketName,
         fileType: 'eml',
@@ -66,6 +82,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         TableName: Resource.CargosynqIngestorRecords.name,
         Item: {
           id: { S: emailData.id },
+          sessionId: { S: emailData.sessionId },
           fileName: { S: emailData.fileName },
           bucketName: { S: emailData.bucketName },
           fileType: { S: emailData.fileType },

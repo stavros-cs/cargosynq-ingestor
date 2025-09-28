@@ -64,6 +64,30 @@ async function parsePdfWithPdf2json(pdfBuffer: Buffer): Promise<any> {
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
 
+// Generate consistent session ID from S3 object details
+function generateSessionId(objectKey: string, etag?: string): string {
+  // Use ETag if available (most reliable), otherwise use object key hash
+  const baseString = etag || objectKey;
+  // Remove quotes from ETag if present and create a clean session ID
+  const cleanBase = baseString.replace(/['"]/g, '');
+  return `session-${cleanBase.substring(0, 16)}`;
+}
+
+// Extract session ID for PDF attachments from their path
+function extractSessionIdFromAttachmentPath(objectKey: string): string | null {
+  // For attachment PDFs, the path includes the original EML filename
+  // Example: "attachments/Re_ Follow-Up _ 1198 __ 03072025-1530 [CSID_6c61e850-900a-443e-af5a-f085ace7c8cd]/_ORDR-3372186___PONR-SP-012_25_TS_-Commercial_Invoice_THE17194-4.pdf"
+  if (objectKey.startsWith('attachments/')) {
+    const pathParts = objectKey.split('/');
+    if (pathParts.length >= 2) {
+      const originalEmlName = pathParts[1]; // The EML filename part
+      // Generate session ID from the original EML filename (without .eml extension)
+      return generateSessionId(originalEmlName);
+    }
+  }
+  return null;
+}
+
 export const handler: SQSHandler = async (event: SQSEvent) => {
   console.log('Processing PDF files for content extraction:', JSON.stringify(event, null, 2));
 
@@ -75,8 +99,20 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       // Extract S3 object information from EventBridge event
       const bucketName = eventBridgeEvent.detail.bucket.name;
       const objectKey = eventBridgeEvent.detail.object.key;
+      const s3ETag = eventBridgeEvent.detail.object.etag;
       
-      console.log(`Processing PDF file content: ${objectKey} from bucket: ${bucketName}`);
+      // Determine session ID based on whether this is a direct PDF or attachment PDF
+      let sessionId: string;
+      const attachmentSessionId = extractSessionIdFromAttachmentPath(objectKey);
+      if (attachmentSessionId) {
+        // This is a PDF attachment - use session ID derived from original EML
+        sessionId = attachmentSessionId;
+        console.log(`Processing PDF attachment: ${objectKey}, derived session ID: ${sessionId}`);
+      } else {
+        // This is a direct PDF upload - generate new session ID
+        sessionId = generateSessionId(objectKey, s3ETag);
+        console.log(`Processing direct PDF: ${objectKey}, session ID: ${sessionId}`);
+      }
 
       // Get the PDF file from S3
       const getObjectCommand = new GetObjectCommand({
@@ -98,6 +134,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       // Create PDF record for DynamoDB
       const pdfData = {
         id: `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        sessionId: sessionId,
         fileName: objectKey,
         bucketName: bucketName,
         fileType: 'pdf',
@@ -134,6 +171,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         TableName: Resource.CargosynqIngestorRecords.name,
         Item: {
           id: { S: pdfData.id },
+          sessionId: { S: pdfData.sessionId },
           fileName: { S: pdfData.fileName },
           bucketName: { S: pdfData.bucketName },
           fileType: { S: pdfData.fileType },

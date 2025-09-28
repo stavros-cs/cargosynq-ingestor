@@ -41,9 +41,13 @@ export default $config({
     
     const recordsTable = new sst.aws.Dynamo("CargosynqIngestorRecords", {
       fields: {
+        sessionId: "string",
         id: "string",
       },
-      primaryIndex: { hashKey: "id" },
+      primaryIndex: { 
+        hashKey: "sessionId", 
+        rangeKey: "id" 
+      },
     });
 
     // Enable EventBridge notifications for the S3 bucket
