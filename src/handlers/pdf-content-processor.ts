@@ -80,9 +80,11 @@ function extractSessionIdFromAttachmentPath(objectKey: string): string | null {
   if (objectKey.startsWith('attachments/')) {
     const pathParts = objectKey.split('/');
     if (pathParts.length >= 2) {
-      const originalEmlName = pathParts[1]; // The EML filename part
-      // Generate session ID from the original EML filename (without .eml extension)
-      return generateSessionId(originalEmlName);
+      const emlFolderName = pathParts[1]; // The EML filename part (without .eml)
+      // Reconstruct the original EML filename by adding .eml extension
+      const originalEmlKey = emlFolderName + '.eml';
+      // Generate session ID from the reconstructed EML filename
+      return generateSessionId(originalEmlKey);
     }
   }
   return null;
@@ -101,18 +103,15 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       const objectKey = eventBridgeEvent.detail.object.key;
       const s3ETag = eventBridgeEvent.detail.object.etag;
       
-      // Determine session ID based on whether this is a direct PDF or attachment PDF
-      let sessionId: string;
-      const attachmentSessionId = extractSessionIdFromAttachmentPath(objectKey);
-      if (attachmentSessionId) {
-        // This is a PDF attachment - use session ID derived from original EML
-        sessionId = attachmentSessionId;
-        console.log(`Processing PDF attachment: ${objectKey}, derived session ID: ${sessionId}`);
-      } else {
-        // This is a direct PDF upload - generate new session ID
-        sessionId = generateSessionId(objectKey, s3ETag);
-        console.log(`Processing direct PDF: ${objectKey}, session ID: ${sessionId}`);
+      // Check if this is a PDF attachment - if so, skip it (handled by EML attachment extractor)
+      if (objectKey.startsWith('attachments/')) {
+        console.log(`Skipping PDF attachment ${objectKey} - already processed by EML attachment extractor`);
+        continue; // Skip this record
       }
+      
+      // This is a direct PDF upload - generate session ID and process
+      const sessionId = generateSessionId(objectKey, s3ETag);
+      console.log(`Processing direct PDF upload: ${objectKey}, session ID: ${sessionId}`);
 
       // Get the PDF file from S3
       const getObjectCommand = new GetObjectCommand({
