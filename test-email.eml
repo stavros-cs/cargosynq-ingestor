@@ -1,0 +1,36 @@
+Delivered-To: recipient@example.com
+Received: from mail.example.com
+Date: Mon, 15 Jan 2024 10:30:00 +0100
+From: sender@shipping.com
+To: recipient@example.com
+Subject: Cargo Shipment Update - Container MSKU123456789
+Message-ID: <20240115103000.12345@shipping.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Dear Customer,
+
+We are writing to update you on the status of your cargo shipment.
+
+Shipment Details:
+- Container Number: MSKU123456789
+- Vessel: MSC Grandiosa
+- ETD (Estimated Time of Departure): January 18, 2024
+- ETA (Estimated Time of Arrival): February 2, 2024
+- Port of Loading: Hamburg, Germany
+- Port of Discharge: New York, USA
+
+Current Status: Container has been loaded and vessel departed Hamburg on schedule.
+
+The cargo includes:
+- 50 boxes of automotive parts
+- 25 pallets of machinery components
+- Total weight: 15.5 tons
+
+Please note that all documentation has been completed and your cargo is in good condition.
+
+If you have any questions or concerns, please contact our customer service team at +49-40-123456 or email us at support@shipping.com.
+
+Best regards,
+Maritime Shipping Solutions
+Customer Service Team
