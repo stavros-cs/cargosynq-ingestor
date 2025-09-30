@@ -85,6 +85,20 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       if (csid) {
         console.log(`Extracted CSID: ${csid} from email: ${objectKey}`);
       }
+
+      // Count attachments and PDF attachments
+      const totalAttachments = parsed.attachments?.length || 0;
+      let pdfAttachmentCount = 0;
+      
+      if (parsed.attachments) {
+        pdfAttachmentCount = parsed.attachments.filter(attachment => {
+          const filename = attachment.filename || '';
+          const contentType = attachment.contentType || '';
+          return contentType === 'application/pdf' || filename.toLowerCase().endsWith('.pdf');
+        }).length;
+      }
+      
+      console.log(`Found ${totalAttachments} total attachments, ${pdfAttachmentCount} PDFs in ${objectKey}`);
       
       const emailData = {
         id: `eml-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -110,7 +124,8 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         // Metadata
         messageId: parsed.messageId || '',
         contentLength: emlContent.length,
-        attachmentCount: parsed.attachments?.length || 0,
+        attachmentCount: totalAttachments,
+        pdfAttachmentCount: pdfAttachmentCount,
       };
 
       // Prepare DynamoDB item
@@ -134,6 +149,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         // Metadata
         contentLength: { N: emailData.contentLength.toString() },
         attachmentCount: { N: emailData.attachmentCount.toString() },
+        pdfAttachmentCount: { N: emailData.pdfAttachmentCount.toString() },
       };
       
       // Add CSID to DynamoDB item if found
@@ -153,7 +169,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
 
       // Extract and upload attachments (unified functionality)
       if (parsed.attachments && parsed.attachments.length > 0) {
-        console.log(`Found ${parsed.attachments.length} attachments in ${objectKey}`);
+        console.log(`Processing ${parsed.attachments.length} attachments (${pdfAttachmentCount} PDFs) from ${objectKey}`);
 
         // Process each attachment
         for (let i = 0; i < parsed.attachments.length; i++) {
@@ -164,13 +180,14 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
           const sanitizedFilename = originalFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
           const attachmentKey = `attachments/${objectKey.replace('.eml', '').replace('.EML', '')}/${sanitizedFilename}`;
           
-          // Prepare metadata including CSID if available
+          // Prepare metadata including CSID and EML record ID if available
           const metadata: any = {
             originalFilename: originalFilename,
             sourceEml: objectKey,
             sessionId: sessionId,
             extractedAt: new Date().toISOString(),
             size: attachment.size?.toString() || '0',
+            emlRecordId: emailData.id, // Pass EML record ID to maintain relationship
           };
           
           // Add CSID to metadata if found (for downstream processors)
@@ -191,7 +208,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
           console.log(`Uploaded attachment: ${attachmentKey}${csid ? ` with CSID: ${csid}` : ''}`);
         }
 
-        console.log(`Successfully processed ${parsed.attachments.length} attachments from ${objectKey}`);
+        console.log(`Successfully processed ${parsed.attachments.length} attachments (${pdfAttachmentCount} PDFs) from ${objectKey}`);
       }
 
     } catch (error) {

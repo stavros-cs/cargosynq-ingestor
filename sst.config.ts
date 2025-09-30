@@ -38,6 +38,9 @@ export default $config({
     const emailSummaryQueue = new sst.aws.Queue("CargosynqIngestorEmailSummaryQueue", {
       visibilityTimeout: "300 seconds", // 5 minutes for AI API calls
     });
+    const orderProcessingQueue = new sst.aws.Queue("CargosynqIngestorOrderProcessingQueue", {
+      visibilityTimeout: "600 seconds", // 10 minutes for complex processing and API calls
+    });
     
     const recordsTable = new sst.aws.Dynamo("CargosynqIngestorRecords", {
       fields: {
@@ -49,6 +52,16 @@ export default $config({
         rangeKey: "id" 
       },
       stream: "new-and-old-images", // Enable DynamoDB stream with full record data
+    });
+
+    // Orders table for storing processed order data from OpenAI
+    const ordersTable = new sst.aws.Dynamo("CargosynqIngestorOrders", {
+      fields: {
+        sessionId: "string",
+      },
+      primaryIndex: { 
+        hashKey: "sessionId",
+      },
     });
 
     // IAM role for the Pipe
@@ -70,59 +83,73 @@ export default $config({
     // IAM policy for the Pipe role
     new aws.iam.RolePolicy("StreamPipePolicy", {
       role: streamPipeRole.name,
-      policy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Action: [
-              "dynamodb:DescribeStream",
-              "dynamodb:GetRecords",
-              "dynamodb:GetShardIterator",
-              "dynamodb:ListStreams"
-            ],
-            Resource: "arn:aws:dynamodb:eu-central-1:585768163538:table/cargosynq-ingestor-dev-CargosynqIngestorRecordsTable-hueohcad/stream/*",
-          },
-          {
-            Effect: "Allow",
-            Action: [
-              "dynamodb:DescribeTable"
-            ],
-            Resource: "arn:aws:dynamodb:eu-central-1:585768163538:table/cargosynq-ingestor-dev-CargosynqIngestorRecordsTable-hueohcad",
-          },
-          {
-            Effect: "Allow",
-            Action: "events:PutEvents",
-            Resource: "*",
-          },
-        ],
+      policy: recordsTable.nodes.table.streamArn.apply(streamArn => {
+        const tableArn = streamArn.replace("/stream/*", "").replace(/\/stream\/.*/, "");
+        return JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: [
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+                "dynamodb:ListStreams"
+              ],
+              Resource: streamArn,
+            },
+            {
+              Effect: "Allow",
+              Action: [
+                "dynamodb:DescribeTable"
+              ],
+              Resource: tableArn,
+            },
+            {
+              Effect: "Allow",
+              Action: "events:PutEvents",
+              Resource: "*",
+            },
+          ],
+        });
       }),
     });
 
     // AWS Pipe to connect DynamoDB Stream directly to EventBridge
     const streamPipe = new aws.pipes.Pipe("CargosynqIngestorStreamPipe", {
       source: recordsTable.nodes.table.streamArn,
-      target: "arn:aws:events:eu-central-1:585768163538:event-bus/default", // Hard-code for now
+      target: recordsTable.nodes.table.arn.apply(tableArn => {
+        // Extract region and account ID from the table ARN
+        const arnParts = tableArn.split(":");
+        const region = arnParts[3];
+        const accountId = arnParts[4];
+        return `arn:aws:events:${region}:${accountId}:event-bus/default`;
+      }),
       roleArn: streamPipeRole.arn,
       sourceParameters: {
         dynamodbStreamParameters: {
           startingPosition: "LATEST",
           batchSize: 1,
+          maximumRecordAgeInSeconds: -1, // Process records indefinitely
         },
-        filterCriteria: {
-          filters: [{
-            pattern: JSON.stringify({
-              eventName: ["INSERT"],
-              dynamodb: {
-                NewImage: {
-                  fileType: {
-                    S: ["eml"]
-                  }
-                }
-              }
-            })
-          }]
-        }
+      },
+      targetParameters: {
+        eventbridgeEventBusParameters: {
+          detailType: "cargosynq.ingestor",
+          source: "cargosynq.dynamodb",
+        },
+      },
+      logConfiguration: {
+        cloudwatchLogsLogDestination: {
+          logGroupArn: recordsTable.nodes.table.arn.apply(tableArn => {
+            const arnParts = tableArn.split(":");
+            const region = arnParts[3];
+            const accountId = arnParts[4];
+            return `arn:aws:logs:${region}:${accountId}:log-group:/aws/vendedlogs/pipes/CargosynqIngestorStreamPipe-873c702`;
+          }),
+        },
+        level: "TRACE",
+        includeExecutionDatas: ["ALL"],
       },
     });
 
@@ -227,11 +254,22 @@ export default $config({
       timeout: "5 minutes", // Allow time for OpenAI API calls
     });
 
-    // EventBridge rule for DynamoDB stream events (EML record inserts)
+    // Lambda function for order processing - checks completion and creates orders
+    const orderProcessor = new sst.aws.Function("CargosynqIngestorOrderProcessor", {
+      handler: "src/handlers/order-processor.handler",
+      environment: {
+        RECORDS_TABLE: recordsTable.name,
+        ORDERS_TABLE: ordersTable.name,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+      },
+      link: [recordsTable, ordersTable],
+      timeout: "10 minutes", // Allow time for API calls and OpenAI processing
+    });
+
+    // EventBridge rule for DynamoDB stream events (EML files from the pipe)
     const dynamoStreamRule = new aws.cloudwatch.EventRule("CargosynqIngestorDynamoStreamRule", {
       eventPattern: JSON.stringify({
-        source: ["aws.dynamodb"],
-        "detail-type": ["DynamoDB Stream Record"],
+        source: ["cargosynq.dynamodb"],
         detail: {
           eventName: ["INSERT"],
           dynamodb: {
@@ -245,14 +283,73 @@ export default $config({
       }),
     });
 
+    // EventBridge rule for DynamoDB stream events (PDF files from the pipe)
+    const dynamoStreamPdfRule = new aws.cloudwatch.EventRule("CargosynqIngestorDynamoStreamPdfRule", {
+      eventPattern: JSON.stringify({
+        source: ["cargosynq.dynamodb"],
+        detail: {
+          eventName: ["INSERT"],
+          dynamodb: {
+            NewImage: {
+              fileType: {
+                S: ["pdf"]
+              }
+            }
+          }
+        }
+      }),
+    });
+
+    // EventBridge rule for DynamoDB stream events (AI Summary completion)
+    const dynamoStreamSummaryRule = new aws.cloudwatch.EventRule("CargosynqIngestorDynamoStreamSummaryRule", {
+      eventPattern: JSON.stringify({
+        source: ["cargosynq.dynamodb"],
+        detail: {
+          eventName: ["MODIFY"],
+          dynamodb: {
+            NewImage: {
+              aiSummary: {
+                S: [{ exists: true }]
+              }
+            }
+          }
+        }
+      }),
+    });
+
+    // Send EML inserts to email summarizer first
     new aws.cloudwatch.EventTarget("CargosynqIngestorEmailSummaryTarget", {
       rule: dynamoStreamRule.name,
       arn: emailSummaryQueue.arn,
       sqsTarget: {},
     });
 
+    // Send EML inserts to order processor as well
+    new aws.cloudwatch.EventTarget("CargosynqIngestorOrderProcessingTarget", {
+      rule: dynamoStreamRule.name,
+      arn: orderProcessingQueue.arn,
+      sqsTarget: {},
+    });
+
+    // Send PDF inserts directly to order processor
+    new aws.cloudwatch.EventTarget("CargosynqIngestorPdfOrderProcessingTarget", {
+      rule: dynamoStreamPdfRule.name,
+      arn: orderProcessingQueue.arn,
+      sqsTarget: {},
+    });
+
+    // Send AI summary completions to order processor
+    new aws.cloudwatch.EventTarget("CargosynqIngestorSummaryOrderProcessingTarget", {
+      rule: dynamoStreamSummaryRule.name,
+      arn: orderProcessingQueue.arn,
+      sqsTarget: {},
+    });
+
     // Connect email summary queue to the emailSummarizer Lambda
     emailSummaryQueue.subscribe(emailSummarizer.arn);
+
+    // Connect order processing queue to the orderProcessor Lambda
+    orderProcessingQueue.subscribe(orderProcessor.arn);
 
 
 
@@ -260,6 +357,27 @@ export default $config({
     new aws.iam.RolePolicy("EmailSummarizerSqsPolicy", {
       role: emailSummarizer.nodes.role.name,
       policy: emailSummaryQueue.arn.apply(queueArn => 
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: [
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes"
+              ],
+              Resource: queueArn,
+            },
+          ],
+        })
+      ),
+    });
+
+    // IAM permissions for order processor to access SQS
+    new aws.iam.RolePolicy("OrderProcessorSqsPolicy", {
+      role: orderProcessor.nodes.role.name,
+      policy: orderProcessingQueue.arn.apply(queueArn => 
         JSON.stringify({
           Version: "2012-10-17",
           Statement: [
@@ -336,6 +454,24 @@ export default $config({
 
     new aws.sqs.QueuePolicy("PdfContentQueuePolicy", {
       queueUrl: pdfContentQueue.url,
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "EventBridgeAccess",
+            Effect: "Allow",
+            Principal: {
+              Service: "events.amazonaws.com",
+            },
+            Action: "sqs:SendMessage",
+            Resource: "*",
+          },
+        ],
+      }),
+    });
+
+    new aws.sqs.QueuePolicy("OrderProcessingQueuePolicy", {
+      queueUrl: orderProcessingQueue.url,
       policy: JSON.stringify({
         Version: "2012-10-17",
         Statement: [

@@ -110,9 +110,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       
       // Check if this is a PDF attachment or direct upload
       if (objectKey.startsWith('attachments/')) {
-        // PDF attachment - extract session ID from path and get metadata
         isAttachment = true;
-        sessionId = extractSessionIdFromAttachmentPath(objectKey) || generateSessionId(objectKey, s3ETag);
         
         // Extract source EML filename from path
         const pathParts = objectKey.split('/');
@@ -120,11 +118,9 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
           sourceEmlFile = pathParts[1] + '.eml'; // Reconstruct EML filename
         }
         
-        console.log(`Processing PDF attachment: ${objectKey}, session ID: ${sessionId}`);
+        console.log(`Processing PDF attachment: ${objectKey}`);
       } else {
-        // Direct PDF upload - generate session ID
-        sessionId = generateSessionId(objectKey, s3ETag);
-        console.log(`Processing direct PDF upload: ${objectKey}, session ID: ${sessionId}`);
+        console.log(`Processing direct PDF upload: ${objectKey}`);
       }
 
       // Get the PDF file from S3
@@ -140,21 +136,52 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         throw new Error('Failed to read PDF file content');
       }
 
-      // Extract CSID from S3 metadata if this is an attachment
+      // Extract metadata from S3 if this is an attachment
+      let emlRecordId: string | null = null;
       if (isAttachment && s3Response.Metadata) {
         csid = s3Response.Metadata.csid || null;
+        emlRecordId = s3Response.Metadata.emlrecordid || null; // S3 metadata keys are lowercase
+        
+        // Use sessionId from S3 metadata (from EML processor)
+        const metadataSessionId = s3Response.Metadata.sessionid;
+        sessionId = metadataSessionId || extractSessionIdFromAttachmentPath(objectKey) || generateSessionId(objectKey, s3ETag);
+        
+        if (metadataSessionId) {
+          console.log(`Using sessionId from S3 metadata: ${sessionId} for PDF attachment: ${objectKey}`);
+        } else {
+          console.log(`Generated sessionId for PDF attachment: ${sessionId} (metadata not found)`);
+        }
+        
         if (csid) {
           console.log(`Found CSID in metadata: ${csid} for PDF attachment: ${objectKey}`);
         }
+        if (emlRecordId) {
+          console.log(`Found EML record ID in metadata: ${emlRecordId} for PDF attachment: ${objectKey}`);
+        }
+      } else {
+        // Direct PDF upload - generate session ID
+        sessionId = generateSessionId(objectKey, s3ETag);
+        console.log(`Generated sessionId for direct PDF upload: ${sessionId}`);
       }
 
       // Parse PDF content using pdf2json (more reliable in Lambda)
       const data = await parsePdfWithPdf2json(pdfBuffer);
       const extractedText = data.text;
       
+      // Generate PDF record ID - use EML record ID relationship if available
+      let pdfId: string;
+      if (isAttachment && emlRecordId) {
+        // For PDF attachments, create ID based on parent EML record ID
+        pdfId = emlRecordId.replace('eml-', 'pdf-');
+        console.log(`Using related PDF ID: ${pdfId} for EML record: ${emlRecordId}`);
+      } else {
+        // For direct PDF uploads, generate new ID
+        pdfId = `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      }
+
       // Create PDF record for DynamoDB
       const pdfData: any = {
-        id: `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: pdfId,
         sessionId: sessionId,
         fileName: objectKey,
         bucketName: bucketName,
@@ -193,8 +220,13 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       pdfData.wordCount = extractedText ? extractedText.split(/\s+/).filter((word: string) => word.length > 0).length : 0;
 
       // Add attachment-specific fields if this is an attachment
-      if (isAttachment && sourceEmlFile) {
-        pdfData.sourceEmlFile = sourceEmlFile;
+      if (isAttachment) {
+        if (sourceEmlFile) {
+          pdfData.sourceEmlFile = sourceEmlFile;
+        }
+        if (emlRecordId) {
+          pdfData.emlRecordId = emlRecordId; // Explicit relationship to parent EML record
+        }
       }
 
       console.log(`Successfully extracted PDF content. Text length: ${extractedText.length}, Pages: ${data.numpages}`);
@@ -222,9 +254,13 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         dynamoItem.csid = { S: pdfData.csid };
       }
 
-      // Add source EML file if this is an attachment
+      // Add attachment-specific fields if this is an attachment
       if (pdfData.sourceEmlFile) {
         dynamoItem.sourceEmlFile = { S: pdfData.sourceEmlFile };
+      }
+      
+      if (pdfData.emlRecordId) {
+        dynamoItem.emlRecordId = { S: pdfData.emlRecordId };
       }
 
       // Save to DynamoDB
@@ -234,7 +270,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       });
 
       await dynamodb.send(putItemCommand);
-      console.log(`PDF record saved to DynamoDB with ID: ${pdfData.id}${pdfData.csid ? ` and CSID: ${pdfData.csid}` : ''}`);
+      console.log(`PDF record saved to DynamoDB with ID: ${pdfData.id}${pdfData.csid ? `, CSID: ${pdfData.csid}` : ''}${pdfData.emlRecordId ? `, related to EML: ${pdfData.emlRecordId}` : ''}`);
 
     } catch (error) {
       // Log the error but consume the message (don't throw)

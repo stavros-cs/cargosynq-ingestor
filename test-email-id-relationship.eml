@@ -1,0 +1,42 @@
+Subject: Ship Manifest - #CSID:12345678-abcd-4ef0-9123-456789abcdef#
+From: operations@cargosynq.com
+To: customer@example.com
+Date: Mon, 30 Sep 2025 16:00:00 +0000
+Message-ID: <manifest-test-001@cargosynq.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary456"
+
+--boundary456
+Content-Type: text/plain; charset=UTF-8
+
+Dear Customer,
+
+Please find attached the complete shipping documentation for your cargo.
+
+Shipment Reference: #CSID:12345678-abcd-4ef0-9123-456789abcdef#
+Container: MSKU7654321
+Vessel: MV Cargo Express
+Route: Rotterdam → New York
+
+Attached documents:
+1. Shipping Manifest (PDF)
+2. Customs Declaration (PDF)
+
+Best regards,
+CargoSynq Operations Team
+
+--boundary456
+Content-Type: application/pdf; name="shipping-manifest.pdf"
+Content-Disposition: attachment; filename="shipping-manifest.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PAovTGVuZ3RoIDYgMCBSCi9GaWx0ZXIgL0ZsYXRlRGVjb2RlCj4+CnN0cmVhbQp4nDPQM1Qo5ypUKM8vyklVyC9LLUosKQaihkCWcWJyfnlOZn6e
+
+--boundary456
+Content-Type: application/pdf; name="customs-declaration.pdf"
+Content-Disposition: attachment; filename="customs-declaration.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PAovTGVuZ3RoIDYgMCBSCi9GaWx0ZXIgL0ZsYXRlRGVjb2RlCj4+CnN0cmVhbQp4nDPQM1Qo5ypUKM8vyklVyC9LLUosKQaihkCWcWJyfnlOZn6e
+
+--boundary456--
