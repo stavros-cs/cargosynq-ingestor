@@ -31,9 +31,6 @@ export default $config({
     const emlQueue = new sst.aws.Queue("CargosynqIngestorEmlQueue", {
       visibilityTimeout: "360 seconds", // 6 minutes - longer than Lambda timeout
     });
-    const emlAttachmentQueue = new sst.aws.Queue("CargosynqIngestorEmlAttachmentQueue", {
-      visibilityTimeout: "360 seconds", // 6 minutes - longer than Lambda timeout
-    });
     const pdfQueue = new sst.aws.Queue("CargosynqIngestorPdfQueue");
     const pdfContentQueue = new sst.aws.Queue("CargosynqIngestorPdfContentQueue", {
       visibilityTimeout: "360 seconds", // 6 minutes - longer than Lambda timeout
@@ -187,11 +184,7 @@ export default $config({
       sqsTarget: {},
     });
 
-    new aws.cloudwatch.EventTarget("CargosynqIngestorEmlAttachmentTarget", {
-      rule: emlRule.name,
-      arn: emlAttachmentQueue.arn,
-      sqsTarget: {},
-    });
+
 
     // Lambda function to process EML files
     const emlProcessor = new sst.aws.Function("CargosynqIngestorEmlProcessor", {
@@ -204,15 +197,7 @@ export default $config({
     });
 
     // Lambda function to extract attachments from EML files
-    const emlAttachmentExtractor = new sst.aws.Function("CargosynqIngestorEmlAttachmentExtractor", {
-      handler: "src/handlers/eml-attachment-extractor.handler",
-      environment: {
-        BUCKET_NAME: bucket.name,
-        RECORDS_TABLE: recordsTable.name,
-      },
-      link: [bucket, recordsTable],
-      timeout: "5 minutes", // Longer timeout for processing large attachments
-    });
+
 
     // Lambda function to process PDF content
     const pdfContentProcessor = new sst.aws.Function("CargosynqIngestorPdfContentProcessor", {
@@ -311,23 +296,7 @@ export default $config({
       }),
     });
 
-    new aws.sqs.QueuePolicy("EmlAttachmentQueuePolicy", {
-      queueUrl: emlAttachmentQueue.url,
-      policy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Sid: "EventBridgeAccess",
-            Effect: "Allow",
-            Principal: {
-              Service: "events.amazonaws.com",
-            },
-            Action: "sqs:SendMessage",
-            Resource: "*",
-          },
-        ],
-      }),
-    });
+
 
     new aws.sqs.QueuePolicy("EmailSummaryQueuePolicy", {
       queueUrl: emailSummaryQueue.url,
@@ -402,24 +371,7 @@ export default $config({
       }))
     });
 
-    // Lambda permissions for attachment extractor
-    new aws.iam.RolePolicy("EmlAttachmentExtractorSqsPolicy", {
-      role: emlAttachmentExtractor.nodes.role.name,
-      policy: emlAttachmentQueue.arn.apply(queueArn => JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Action: [
-              "sqs:ReceiveMessage",
-              "sqs:DeleteMessage",
-              "sqs:GetQueueAttributes"
-            ],
-            Resource: queueArn
-          }
-        ]
-      }))
-    });
+
 
     // Lambda permissions for PDF content processor
     new aws.iam.RolePolicy("PdfContentProcessorSqsPolicy", {
@@ -448,13 +400,7 @@ export default $config({
       maximumBatchingWindowInSeconds: 5,
     });
 
-    // Configure SQS to trigger the attachment extractor
-    new aws.lambda.EventSourceMapping("EmlAttachmentExtractorEventSource", {
-      eventSourceArn: emlAttachmentQueue.arn,
-      functionName: emlAttachmentExtractor.name,
-      batchSize: 5, // Smaller batch for attachment processing
-      maximumBatchingWindowInSeconds: 10,
-    });
+
 
     // Configure SQS to trigger the PDF content processor
     new aws.lambda.EventSourceMapping("PdfContentProcessorEventSource", {
@@ -467,12 +413,10 @@ export default $config({
     return {
       bucket: bucket.name,
       emlQueue: emlQueue.url,
-      emlAttachmentQueue: emlAttachmentQueue.url,
       pdfQueue: pdfQueue.url,
       pdfContentQueue: pdfContentQueue.url,
       recordsTable: recordsTable.name,
       emlProcessor: emlProcessor.name,
-      emlAttachmentExtractor: emlAttachmentExtractor.name,
       pdfContentProcessor: pdfContentProcessor.name,
     };
   },

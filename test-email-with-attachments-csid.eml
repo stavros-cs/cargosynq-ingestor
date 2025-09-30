@@ -1,0 +1,79 @@
+Subject: Cargo Documentation - #CSID:a1b2c3d4-e5f6-4789-ab12-123456789abc#
+From: shipping@cargosynq.com
+To: customer@example.com
+Date: Mon, 30 Sep 2025 14:30:00 +0000
+Message-ID: <cargo-docs-001@cargosynq.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain; charset=UTF-8
+
+Dear Valued Customer,
+
+Please find attached the documentation for your cargo shipment.
+
+Shipment Details:
+- Reference: #CSID:a1b2c3d4-e5f6-4789-ab12-123456789abc#
+- Container: TCLU1234567
+- Vessel: MV CargoSynq Express
+- Port of Loading: Hamburg, Germany
+- Port of Discharge: Miami, USA
+
+The attached documents include:
+1. Bill of Lading (PDF)
+2. Commercial Invoice (PDF)
+3. Packing List (TXT)
+
+Please review all documents and contact us if you have any questions.
+
+Best regards,
+CargoSynq Shipping Department
+
+--boundary123
+Content-Type: application/pdf; name="bill-of-lading.pdf"
+Content-Disposition: attachment; filename="bill-of-lading.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PAovTGVuZ3RoIDYgMCBSCi9GaWx0ZXIgL0ZsYXRlRGVjb2RlCj4+CnN0cmVhbQp4nDPQM1Qo5ypUKM8vyklVyC9LLUosKQaihkCWcWJyfnlOZn6e
+KohpXJiZl5lcWpycmJuaV4Li6ZdWFuQnFqUWKQBZcZn5yalFxZn5eRA+SLVSeGZeCapxabE5iXklmfl5KcWpFcWZeSVA0YLUosQSBSMjAwUQAamFOalFOZnw0UAgMTAyMLJQSMwtyS+
+tyC8qSU1VSMxLyU1NLinKTFGwyU9NzStKzC0tyi1JzC3IzM+LB0hKTi0qyi9Jik7z
+
+--boundary123
+Content-Type: application/pdf; name="commercial-invoice.pdf"
+Content-Disposition: attachment; filename="commercial-invoice.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PAovTGVuZ3RoIDYgMCBSCi9GaWx0ZXIgL0ZsYXRlRGVjb2RlCj4+CnN0cmVhbQp4nDPQM1Qo5ypUKM8vyklVyC9LLUosKQaihkCWcWJyfnlOZn6e
+YxbiK5dWFuQnFqUWKQBZcZn5yalFxZn5eRA+SLVSeGZeCapxabE5iXklmfl5KcWpFcWZeSVA0YLUosQSBSMjAwUQAamFOalFOZnw0UAgMTAyMLJQSMxLyU1NLinKTFGwyU9NzStKzC0tyi1JzC3IzM+LB0hKTi0qyi9Jik
+
+--boundary123
+Content-Type: text/plain; name="packing-list.txt"
+Content-Disposition: attachment; filename="packing-list.txt"
+Content-Transfer-Encoding: 7bit
+
+PACKING LIST
+============
+
+Shipment Reference: #CSID:a1b2c3d4-e5f6-4789-ab12-123456789abc#
+Container: TCLU1234567
+
+Package 1:
+- Description: Electronics Components
+- Quantity: 50 boxes
+- Weight: 1,250 kg
+- Dimensions: 120cm x 80cm x 60cm each
+
+Package 2:
+- Description: Automotive Parts
+- Quantity: 25 boxes
+- Weight: 2,100 kg
+- Dimensions: 150cm x 100cm x 80cm each
+
+Total Weight: 3,350 kg
+Total Volume: 32.5 CBM
+
+Prepared by: CargoSynq Logistics
+Date: 30-Sep-2025
+
+--boundary123--

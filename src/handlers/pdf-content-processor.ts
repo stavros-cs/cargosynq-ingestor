@@ -103,15 +103,29 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
       const objectKey = eventBridgeEvent.detail.object.key;
       const s3ETag = eventBridgeEvent.detail.object.etag;
       
-      // Check if this is a PDF attachment - if so, skip it (handled by EML attachment extractor)
-      if (objectKey.startsWith('attachments/')) {
-        console.log(`Skipping PDF attachment ${objectKey} - already processed by EML attachment extractor`);
-        continue; // Skip this record
-      }
+      let sessionId: string;
+      let csid: string | null = null;
+      let sourceEmlFile: string | null = null;
+      let isAttachment = false;
       
-      // This is a direct PDF upload - generate session ID and process
-      const sessionId = generateSessionId(objectKey, s3ETag);
-      console.log(`Processing direct PDF upload: ${objectKey}, session ID: ${sessionId}`);
+      // Check if this is a PDF attachment or direct upload
+      if (objectKey.startsWith('attachments/')) {
+        // PDF attachment - extract session ID from path and get metadata
+        isAttachment = true;
+        sessionId = extractSessionIdFromAttachmentPath(objectKey) || generateSessionId(objectKey, s3ETag);
+        
+        // Extract source EML filename from path
+        const pathParts = objectKey.split('/');
+        if (pathParts.length >= 2) {
+          sourceEmlFile = pathParts[1] + '.eml'; // Reconstruct EML filename
+        }
+        
+        console.log(`Processing PDF attachment: ${objectKey}, session ID: ${sessionId}`);
+      } else {
+        // Direct PDF upload - generate session ID
+        sessionId = generateSessionId(objectKey, s3ETag);
+        console.log(`Processing direct PDF upload: ${objectKey}, session ID: ${sessionId}`);
+      }
 
       // Get the PDF file from S3
       const getObjectCommand = new GetObjectCommand({
@@ -126,12 +140,20 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         throw new Error('Failed to read PDF file content');
       }
 
+      // Extract CSID from S3 metadata if this is an attachment
+      if (isAttachment && s3Response.Metadata) {
+        csid = s3Response.Metadata.csid || null;
+        if (csid) {
+          console.log(`Found CSID in metadata: ${csid} for PDF attachment: ${objectKey}`);
+        }
+      }
+
       // Parse PDF content using pdf2json (more reliable in Lambda)
       const data = await parsePdfWithPdf2json(pdfBuffer);
       const extractedText = data.text;
       
       // Create PDF record for DynamoDB
-      const pdfData = {
+      const pdfData: any = {
         id: `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         sessionId: sessionId,
         fileName: objectKey,
@@ -143,50 +165,76 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
         fileSize: pdfBuffer.length,
         isValidPdf: true,
         
-        // Extracted content from pdf-parse (same as your working code)
+        // Extracted content
         textContent: extractedText || '',
         pageCount: data.numpages || 0,
         
-        // Additional metadata from pdf-parse info
-        pdfInfo: {
-          title: data.info?.Title || '',
-          author: data.info?.Author || '',
-          subject: data.info?.Subject || '',
-          creator: data.info?.Creator || '',
-          producer: data.info?.Producer || '',
-          creationDate: data.info?.CreationDate || '',
-          modDate: data.info?.ModDate || '',
-        },
-        
-        // Content statistics
-        characterCount: extractedText?.length || 0,
-        wordCount: extractedText ? extractedText.split(/\s+/).filter((word: string) => word.length > 0).length : 0,
+        // Attachment-specific fields
+        type: isAttachment ? 'attachment' : 'direct-upload',
       };
 
+      // Add CSID if available (from attachment metadata)
+      if (csid) {
+        pdfData.csid = csid;
+      }
+
+      // Add additional fields to pdfData
+      pdfData.pdfInfo = {
+        title: data.info?.Title || '',
+        author: data.info?.Author || '',
+        subject: data.info?.Subject || '',
+        creator: data.info?.Creator || '',
+        producer: data.info?.Producer || '',
+        creationDate: data.info?.CreationDate || '',
+        modDate: data.info?.ModDate || '',
+      };
+      
+      pdfData.characterCount = extractedText?.length || 0;
+      pdfData.wordCount = extractedText ? extractedText.split(/\s+/).filter((word: string) => word.length > 0).length : 0;
+
+      // Add attachment-specific fields if this is an attachment
+      if (isAttachment && sourceEmlFile) {
+        pdfData.sourceEmlFile = sourceEmlFile;
+      }
+
       console.log(`Successfully extracted PDF content. Text length: ${extractedText.length}, Pages: ${data.numpages}`);
+
+      // Prepare DynamoDB item
+      const dynamoItem: any = {
+        id: { S: pdfData.id },
+        sessionId: { S: pdfData.sessionId },
+        fileName: { S: pdfData.fileName },
+        bucketName: { S: pdfData.bucketName },
+        fileType: { S: pdfData.fileType },
+        processedAt: { S: pdfData.processedAt },
+        fileSize: { N: pdfData.fileSize.toString() },
+        isValidPdf: { BOOL: pdfData.isValidPdf },
+        textContent: { S: pdfData.textContent },
+        pageCount: { N: pdfData.pageCount.toString() },
+        pdfInfo: { S: JSON.stringify(pdfData.pdfInfo) },
+        characterCount: { N: pdfData.characterCount.toString() },
+        wordCount: { N: pdfData.wordCount.toString() },
+        type: { S: pdfData.type },
+      };
+
+      // Add CSID if available
+      if (pdfData.csid) {
+        dynamoItem.csid = { S: pdfData.csid };
+      }
+
+      // Add source EML file if this is an attachment
+      if (pdfData.sourceEmlFile) {
+        dynamoItem.sourceEmlFile = { S: pdfData.sourceEmlFile };
+      }
 
       // Save to DynamoDB
       const putItemCommand = new PutItemCommand({
         TableName: Resource.CargosynqIngestorRecords.name,
-        Item: {
-          id: { S: pdfData.id },
-          sessionId: { S: pdfData.sessionId },
-          fileName: { S: pdfData.fileName },
-          bucketName: { S: pdfData.bucketName },
-          fileType: { S: pdfData.fileType },
-          processedAt: { S: pdfData.processedAt },
-          fileSize: { N: pdfData.fileSize.toString() },
-          isValidPdf: { BOOL: pdfData.isValidPdf },
-          textContent: { S: pdfData.textContent },
-          pageCount: { N: pdfData.pageCount.toString() },
-          pdfInfo: { S: JSON.stringify(pdfData.pdfInfo) },
-          characterCount: { N: pdfData.characterCount.toString() },
-          wordCount: { N: pdfData.wordCount.toString() },
-        },
+        Item: dynamoItem,
       });
 
       await dynamodb.send(putItemCommand);
-      console.log(`PDF record saved to DynamoDB with ID: ${pdfData.id}`);
+      console.log(`PDF record saved to DynamoDB with ID: ${pdfData.id}${pdfData.csid ? ` and CSID: ${pdfData.csid}` : ''}`);
 
     } catch (error) {
       // Log the error but consume the message (don't throw)

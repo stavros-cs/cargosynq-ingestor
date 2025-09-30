@@ -1,0 +1,22 @@
+Subject: Shipment Update - #CSID:94794ac9-d2da-40f4-b87e-8e14783010ff#
+From: sender@example.com
+To: recipient@example.com
+Date: Mon, 29 Sep 2025 10:00:00 +0000
+Message-ID: <test123@example.com>
+Content-Type: text/plain; charset=UTF-8
+
+Dear Customer,
+
+We are pleased to inform you that your shipment has been processed and is now ready for dispatch.
+
+Shipment Details:
+- Tracking reference: #CSID:94794ac9-d2da-40f4-b87e-8e14783010ff#
+- Departure port: Hamburg
+- Arrival port: Miami
+- Estimated departure: October 1, 2025
+- Estimated arrival: October 15, 2025
+
+Please keep this reference number for tracking purposes.
+
+Best regards,
+CargoSynq Support Team

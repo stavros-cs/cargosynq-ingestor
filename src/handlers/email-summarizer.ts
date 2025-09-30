@@ -12,6 +12,8 @@ interface OpenAIResponse {
   }>;
 }
 
+
+
 // Function to call OpenAI API for email summarization
 async function generateEmailSummary(emailContent: string): Promise<string> {
   const openaiApiKey = process.env.OPENAI_API_KEY;

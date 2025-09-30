@@ -1,6 +1,6 @@
 import { SQSEvent, SQSHandler } from 'aws-lambda';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { Resource } from 'sst';
 import { simpleParser, ParsedMail, Attachment } from 'mailparser';
 import PDFParser from 'pdf2json';
@@ -15,6 +15,35 @@ function generateSessionId(objectKey: string, etag?: string): string {
   // Remove quotes from ETag if present and create a clean session ID
   const cleanBase = baseString.replace(/['"]/g, '');
   return `session-${cleanBase.substring(0, 16)}`;
+}
+
+// Query DynamoDB to find the EML record and extract CSID
+async function getCSIDFromEMLRecord(sessionId: string, sourceEmlFile: string): Promise<string | null> {
+  try {
+    const queryCommand = new QueryCommand({
+      TableName: Resource.CargosynqIngestorRecords.name,
+      KeyConditionExpression: 'sessionId = :sessionId',
+      FilterExpression: 'fileType = :fileType AND fileName = :fileName',
+      ExpressionAttributeValues: {
+        ':sessionId': { S: sessionId },
+        ':fileType': { S: 'eml' },
+        ':fileName': { S: sourceEmlFile },
+      },
+      ProjectionExpression: 'csid',
+    });
+
+    const result = await dynamodb.send(queryCommand);
+    
+    if (result.Items && result.Items.length > 0) {
+      const emlRecord = result.Items[0];
+      return emlRecord.csid?.S || null;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error querying for EML record CSID:', error);
+    return null;
+  }
 }
 
 // Parse PDF content using pdf2json (same as PDF processor)
@@ -115,6 +144,12 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
 
       console.log(`Found ${parsed.attachments.length} attachments in ${objectKey}`);
 
+      // Query for CSID from the parent EML record
+      const csid = await getCSIDFromEMLRecord(sessionId, objectKey);
+      if (csid) {
+        console.log(`Found CSID ${csid} for EML ${objectKey}, will propagate to attachments`);
+      }
+
       // Process each attachment
       for (let i = 0; i < parsed.attachments.length; i++) {
         const attachment: Attachment = parsed.attachments[i];
@@ -167,6 +202,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
               size: attachment.size || 0,
               extractedAt: new Date().toISOString(),
               bucketName: bucketName,
+              csid: csid, // Propagate CSID from parent EML
               
               // PDF content fields
               fileName: attachmentKey, // S3 key for the PDF
@@ -210,6 +246,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
               pageCount: 0,
               characterCount: 0,
               wordCount: 0,
+              csid: csid, // Propagate CSID from parent EML
             };
           }
         } else {
@@ -226,6 +263,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
             size: attachment.size || 0,
             extractedAt: new Date().toISOString(),
             bucketName: bucketName,
+            csid: csid, // Propagate CSID from parent EML
           };
         }
 
@@ -259,13 +297,18 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
           }
         }
 
+        // Add CSID if available (propagated from parent EML)
+        if (attachmentRecord.csid) {
+          dynamoItem.csid = { S: attachmentRecord.csid };
+        }
+
         const putAttachmentCommand = new PutItemCommand({
           TableName: Resource.CargosynqIngestorRecords.name,
           Item: dynamoItem,
         });
 
         await dynamodb.send(putAttachmentCommand);
-        console.log(`Recorded attachment in DynamoDB: ${attachmentRecord.id}`);
+        console.log(`Recorded attachment in DynamoDB: ${attachmentRecord.id}${attachmentRecord.csid ? ` with CSID: ${attachmentRecord.csid}` : ''}`);
       }
 
       console.log(`Successfully processed ${parsed.attachments.length} attachments from ${objectKey}`);
