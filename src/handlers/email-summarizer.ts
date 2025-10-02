@@ -1,6 +1,7 @@
 import { SQSEvent, SQSHandler } from 'aws-lambda';
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { Resource } from 'sst';
+import { createCargosynqDevAgentMessages } from './appsync';
 
 const dynamodb = new DynamoDBClient({});
 
@@ -22,16 +23,21 @@ async function generateEmailSummary(emailContent: string): Promise<string> {
     throw new Error('OpenAI API key not configured');
   }
 
-  const prompt = `Please provide a concise summary of the following email content. Focus on:
-- Main purpose/request
-- Key information
-- Important dates, amounts, or references
-- Action items if any
+  const prompt = `Please provide a concise summary of the following email content. 
+  Data will be stored on dynamo DB through graphQL API. 
+  So avoid using special characters or asterisks. Stick to alphanumeric characters and basic punctuation.
+  Provide in summary the sender email address. Start the summaery like this "Email from [sender email]: ...".
 
-Email content:
-${emailContent}
+  Focus on:
+    - Main purpose/request
+    - Key information
+    - Important dates, amounts, or references
+    - Action items if any
 
-Summary:`;
+  Email content:
+  ${emailContent}
+
+  Summary:`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -110,9 +116,9 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
 
       // Prepare email content for summarization
       const emailContent = `Subject: ${subject}
-From: ${from}
+      From: ${from}
 
-${bodyText}`;
+      ${bodyText}`;
 
       // Generate AI summary
       let summary: string;
@@ -137,6 +143,55 @@ ${bodyText}`;
           ':timestamp': { S: new Date().toISOString() },
         },
       });
+
+      const pid = "02-10-2025-0028#1";
+      const hasToolCalls = false;
+      
+      // Sanitize message content for AppSync
+      /*let sanitizedMessage = summary || '';
+      
+      // Remove or replace potentially problematic characters
+      sanitizedMessage = sanitizedMessage
+        .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control characters
+        .replace(/"/g, '\\"') // Escape quotes
+        .trim();*/
+      
+      //console.log(sanitizedMessage);
+      // Limit message length if needed (adjust as per your schema requirements)
+      /*const maxLength = 500; // Adjust based on your GraphQL schema
+      if (sanitizedMessage.length > maxLength) {
+        sanitizedMessage = sanitizedMessage.substring(0, maxLength) + '...';
+      }*/
+      
+      const  graphQLmessage =  {
+        "content": summary,
+        "role": "user"
+      };
+
+      // Save to agent messages table via AppSync
+      try {
+        const input = {
+          pid,
+          datetime: new Date().toISOString(),
+          message: JSON.stringify(graphQLmessage),
+          toolcall: hasToolCalls
+        };
+        console.log('Saving to AppSync with input:', {
+          ...input
+        });
+        await createCargosynqDevAgentMessages(input);
+        console.log('Saved AI summary to agent messages table');
+      } catch (err) {
+        console.error('Error saving AI summary to agent messages table:', err);
+        console.error('Input that caused error:', {
+          pid,
+          datetime: new Date().toISOString(),
+          message: sanitizedMessage,
+          toolcall: hasToolCalls
+        });
+        // Continue processing even if AppSync save fails
+      }
+     
 
       await dynamodb.send(updateCommand);
       console.log(`Updated EML record ${recordId} with AI summary`);
